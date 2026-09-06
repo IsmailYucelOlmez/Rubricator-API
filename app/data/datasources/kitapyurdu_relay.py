@@ -8,20 +8,25 @@ logger = logging.getLogger(__name__)
 # Kitapyurdu's WAF blocks Supabase Edge Functions' (Deno Deploy) datacenter
 # IP range outright (confirmed: identical requests get 403 from there but
 # 200 from this service's own IP). This datasource lets scrape-tr-books
-# relay its fetches through here instead. Locked to this one host — an
-# authenticated arbitrary-URL fetch would otherwise be an SSRF/open-proxy
-# risk if the shared API key ever leaked.
-ALLOWED_HOSTS = {"www.kitapyurdu.com", "kitapyurdu.com"}
+# relay its fetches through here instead. Locked to an explicit host
+# allowlist — an authenticated arbitrary-URL fetch would otherwise be an
+# SSRF/open-proxy risk if the shared API key ever leaked. Add a new host
+# here when scrape-tr-books adds a new `BookSource`.
+ALLOWED_HOSTS = {
+    "www.kitapyurdu.com",
+    "kitapyurdu.com",
+    "www.dr.com.tr",
+    "dr.com.tr",
+}
 TIMEOUT_SECONDS = 15
 
-_HEADERS = {
+_BASE_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     ),
     "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Referer": "https://www.kitapyurdu.com/",
 }
 
 
@@ -46,8 +51,10 @@ def fetch(url: str) -> tuple[int, str]:
     URL outside [ALLOWED_HOSTS], and lets network-level exceptions
     (timeout, connection error) propagate as-is.
     """
+    parsed = urlparse(url)
     if not is_allowed(url):
         raise DisallowedHostError(f"Host not allowed for relay: {url}")
 
-    response = requests.get(url, headers=_HEADERS, timeout=TIMEOUT_SECONDS)
+    headers = {**_BASE_HEADERS, "Referer": f"{parsed.scheme}://{parsed.hostname}/"}
+    response = requests.get(url, headers=headers, timeout=TIMEOUT_SECONDS)
     return response.status_code, response.text
