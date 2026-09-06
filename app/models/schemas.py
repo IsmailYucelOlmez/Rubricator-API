@@ -38,6 +38,11 @@ class HealthResponse(BaseModel):
     status: str = "ok"
 
 
+class RelayFetchResponse(BaseModel):
+    status: int
+    html: str
+
+
 class SessionLimitsResponse(BaseModel):
     maxQuestionsRemaining: int
 

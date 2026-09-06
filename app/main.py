@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.routers.scrape_relay import router as scrape_relay_router
 from app.api.routers.semantic import router as semantic_router
 from app.api.routers.sessions import router as sessions_router
 from app.core.config import settings
@@ -29,6 +30,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(scrape_relay_router)
 app.include_router(semantic_router)
 app.include_router(sessions_router)
 
