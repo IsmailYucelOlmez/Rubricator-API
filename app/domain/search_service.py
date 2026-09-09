@@ -61,6 +61,14 @@ class SemanticSearchService:
         # covers Turkish books, and Google Books results skew English anyway.
         effective_mode = "simple" if language == "tr" else mode
 
+        # The TR catalog's simple_category values don't line up with the app's
+        # Fiction/Nonfiction taxonomy: most Kitapyurdu-sourced rows have no
+        # category at all, and the Kaggle-sourced rows use a different, unmapped
+        # taxonomy (literature/academic/business_and_economy/...). Filtering by
+        # category would silently exclude most of the TR catalog either way, so
+        # skip the filter entirely for Turkish searches.
+        effective_category = "All" if language == "tr" else category
+
         rewritten: str | None = None
         query_vector: list[float] | None = None
 
@@ -84,7 +92,7 @@ class SemanticSearchService:
 
         rows = self.catalog.search_by_embedding(
             query_vector,
-            category if category != "All" else None,
+            effective_category if effective_category != "All" else None,
             final_limit,
             initial_k,
             language,
