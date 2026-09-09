@@ -5,7 +5,7 @@ from typing import Any, Literal
 from app.core.config import settings
 from app.data.datasources.gemini import GeminiEmbeddingClient
 from app.data.datasources.google_books import GoogleBooksClient
-from app.data.repositories.book_catalog_repository import BookCatalogRepository
+from app.data.repositories.book_catalog_repository import get_catalog_repository
 from app.data.repositories.query_cache_repository import QueryCacheRepository
 from app.domain.book_normalizer import normalize_volumes
 from app.domain.query_rewriter import QueryRewriter
@@ -31,13 +31,13 @@ class SemanticSearchService:
         google_client: GoogleBooksClient | None = None,
         query_rewriter: QueryRewriter | None = None,
         query_cache: QueryCacheRepository | None = None,
-        catalog: BookCatalogRepository | None = None,
+        catalog: Any | None = None,
     ) -> None:
         self.embeddings = embeddings or GeminiEmbeddingClient()
         self.google_client = google_client or GoogleBooksClient()
         self.query_rewriter = query_rewriter or QueryRewriter()
         self.query_cache = query_cache or QueryCacheRepository()
-        self.catalog = catalog or BookCatalogRepository(self.embeddings)
+        self.catalog = catalog or get_catalog_repository(self.embeddings)
 
     def search(
         self,
@@ -47,6 +47,7 @@ class SemanticSearchService:
         tone: str = "All",
         limit: int | None = None,
         initial_top_k: int | None = None,
+        language: str | None = None,
     ) -> tuple[list[SemanticBookResult], str | None]:
         search_query = query.strip()[: settings.max_query_length]
         if not search_query:
@@ -56,10 +57,14 @@ class SemanticSearchService:
         if mode == "advanced":
             tone = "All"
 
+        # Turkish mode never calls Google Books: the local catalog already
+        # covers Turkish books, and Google Books results skew English anyway.
+        effective_mode = "simple" if language == "tr" else mode
+
         rewritten: str | None = None
         query_vector: list[float] | None = None
 
-        if mode == "advanced":
+        if effective_mode == "advanced":
             rewrite_result, query_vector = self._fetch_and_ingest(
                 search_query,
                 category=category,
@@ -82,6 +87,7 @@ class SemanticSearchService:
             category if category != "All" else None,
             final_limit,
             initial_k,
+            language,
         )
         rows = self._apply_tone_sort(rows, tone)
         rows = rows[:final_limit]

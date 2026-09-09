@@ -27,7 +27,6 @@ from app.data.datasources.supabase import fetch_all_catalog_isbns, get_supabase_
 
 load_dotenv()
 
-PAUSE_SECONDS = 65
 EMOTION_COLUMNS = ("joy", "surprise", "anger", "fear", "sadness")
 
 
@@ -70,6 +69,16 @@ def main() -> None:
     parser.add_argument("--csv", required=True, type=Path, help="Path to books_with_emotions.csv")
     parser.add_argument("--batch-size", type=int, default=50)
     parser.add_argument("--resume", action="store_true", help="Skip ISBNs already in catalog")
+    parser.add_argument(
+        "--pause-seconds",
+        type=float,
+        default=5.0,
+        help=(
+            "Fixed pause between batches on top of embed_with_retry's own 429 backoff. "
+            "The old default (65s) was sized for the Gemini free tier's per-minute cap; "
+            "lower it further (or watch the logs for 429s and raise it) once you're on a paid tier."
+        ),
+    )
     args = parser.parse_args()
 
     if not settings.google_api_key:
@@ -133,6 +142,7 @@ def main() -> None:
                     "emotion_scores": build_emotion_scores(row),
                     "embedding": vector,
                     "source": str(row.get("source") or "local"),
+                    "language": str(row.get("language") or "en"),
                 }
             )
 
@@ -140,8 +150,8 @@ def main() -> None:
         completed = len(done) + start + len(batch_df)
         print(f"Progress: {completed}/{total}")
 
-        if start + args.batch_size < len(pending):
-            time.sleep(PAUSE_SECONDS)
+        if start + args.batch_size < len(pending) and args.pause_seconds > 0:
+            time.sleep(args.pause_seconds)
 
     print("Done. Run: reindex index book_catalog_embedding_idx; analyze book_catalog;")
 

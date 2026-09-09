@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     google_books_api_key: str = ""
     supabase_url: str = ""
     supabase_service_role_key: str = ""
+    cluster_endpoint: str = ""
+    cluster_api_key: str = ""
+    qdrant_collection: str = "book_catalog"
+    catalog_backend: Literal["supabase", "qdrant"] = "supabase"
     semantic_query_cache_ttl_seconds: int = 3600
     max_new_books: int = 5
     cors_origins: str = "*"

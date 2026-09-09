@@ -5,6 +5,7 @@ pydantic-settings>=2.6.0
 langchain-google-genai>=2.0.0
 langchain-core>=0.3.0
 supabase>=2.10.0
+qdrant-client>=1.19.0
 pandas>=2.2.0
 requests>=2.32.0
 python-dotenv>=1.0.0

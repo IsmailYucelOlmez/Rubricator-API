@@ -43,7 +43,7 @@ def semantic_search(
     if not settings.google_api_key:
         raise HTTPException(status_code=503, detail="Embedding service is not configured")
 
-    if body.mode == "advanced" and not settings.google_books_api_key:
+    if body.mode == "advanced" and body.language != "tr" and not settings.google_books_api_key:
         logger.warning("Advanced mode without GOOGLE_BOOKS_API_KEY; using anonymous quota")
 
     try:
@@ -53,6 +53,7 @@ def semantic_search(
             category=body.category,
             tone=body.tone,
             limit=body.limit,
+            language=body.language,
         )
     except RuntimeError as error:
         logger.exception("Semantic search failed")

@@ -10,6 +10,7 @@ class SemanticSearchRequest(BaseModel):
     category: str = "All"
     tone: str = "All"
     limit: int = Field(default=16, ge=1, le=32)
+    language: str | None = None  # "tr" -> catalog-only search, Google Books is skipped
 
 
 class SemanticBookResult(BaseModel):

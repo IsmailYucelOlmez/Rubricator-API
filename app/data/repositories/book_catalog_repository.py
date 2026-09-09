@@ -2,6 +2,7 @@ import logging
 import re
 from typing import Any
 
+from app.core.config import settings
 from app.data.datasources.gemini import GeminiEmbeddingClient
 from app.data.datasources.supabase import fetch_all_catalog_isbns, get_supabase_client
 from app.models.book_record import BookRecord
@@ -16,7 +17,7 @@ def parse_volume_id_from_thumbnail(url: str | None) -> str | None:
     return match.group(1) if match else None
 
 
-class BookCatalogRepository:
+class SupabaseBookCatalogRepository:
     """Persistence: book_catalog table + semantic_search_books RPC."""
 
     def __init__(self, embeddings: GeminiEmbeddingClient | None = None) -> None:
@@ -64,6 +65,7 @@ class BookCatalogRepository:
         category: str | None,
         limit: int,
         initial_k: int,
+        language: str | None = None,
     ) -> list[dict[str, Any]]:
         rpc_result = self._client.rpc(
             "semantic_search_books",
@@ -72,6 +74,7 @@ class BookCatalogRepository:
                 "p_category": category,
                 "p_limit": limit,
                 "p_initial_k": initial_k,
+                "p_language": language,
             },
         ).execute()
         return rpc_result.data or []
@@ -91,3 +94,14 @@ class BookCatalogRepository:
             "embedding": vector,
             "source": book.source,
         }
+
+
+def get_catalog_repository(embeddings: GeminiEmbeddingClient | None = None) -> Any:
+    """Selects the book_catalog backend (Supabase or Qdrant) via CATALOG_BACKEND."""
+    if settings.catalog_backend == "qdrant":
+        from app.data.repositories.qdrant_book_catalog_repository import (
+            QdrantBookCatalogRepository,
+        )
+
+        return QdrantBookCatalogRepository(embeddings)
+    return SupabaseBookCatalogRepository(embeddings)
