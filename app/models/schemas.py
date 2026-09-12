@@ -39,6 +39,17 @@ class HealthResponse(BaseModel):
     status: str = "ok"
 
 
+class TrbookDescriptionRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=300)
+    author: str = Field(..., min_length=1, max_length=200)
+    isbn: str = Field(..., min_length=10, max_length=17)
+    language: str = "tr"
+
+
+class TrbookDescriptionResponse(BaseModel):
+    description: str
+
+
 class RelayFetchResponse(BaseModel):
     status: int
     html: str

@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routers.scrape_relay import router as scrape_relay_router
 from app.api.routers.semantic import router as semantic_router
 from app.api.routers.sessions import router as sessions_router
+from app.api.routers.trbooks import router as trbooks_router
 from app.core.config import settings
 from app.data.session_store import get_session_store
 
@@ -33,6 +34,7 @@ app.add_middleware(
 app.include_router(scrape_relay_router)
 app.include_router(semantic_router)
 app.include_router(sessions_router)
+app.include_router(trbooks_router)
 
 
 @app.get("/")

@@ -10,7 +10,7 @@ Bu servis **bağımsız bir deploy birimidir**. Flutter (BookApp) ile yalnızca 
 | Ortak Python paketi | Yok |
 | Paylaşılan `.env` | Yok (kendi `.env`) |
 | Supabase şeması | Paylaşılır — `supabase/migrations/` bu repoda |
-| HTTP API sözleşmesi | `POST /api/v1/semantic/search` |
+| HTTP API sözleşmesi | `POST /api/v1/semantic/search`, `POST /api/v1/trbooks/generate-description` |
 
 `bookapp-api/` klasörünü ayrı bir git reposuna kopyalayıp deploy edebilirsiniz.
 
@@ -20,7 +20,8 @@ Bu servis **bağımsız bir deploy birimidir**. Flutter (BookApp) ile yalnızca 
 ┌─────────────────────────────────────────┐
 │  api/          HTTP (FastAPI routers)   │  ← İnce: doğrulama, DTO, status kodları
 ├─────────────────────────────────────────┤
-│  domain/       İş mantığı               │  ← search_service, query_rewriter, normalizer
+│  domain/       İş mantığı               │  ← search_service, query_rewriter,
+│                                          │    description_generator, normalizer
 ├─────────────────────────────────────────┤
 │  data/         Veri erişimi             │  ← Supabase, Gemini, Google Books
 │    datasources/   ham I/O               │

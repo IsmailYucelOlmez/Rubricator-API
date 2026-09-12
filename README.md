@@ -49,6 +49,15 @@ Advanced flow:
 3. pgvector search (tone is ignored in advanced mode)
 4. Results cached in `semantic_query_cache` (Supabase)
 
+## Turkish book descriptions (trbooks)
+
+`POST /api/v1/trbooks/generate-description` — given `{title, author, isbn, language}`,
+returns a short, spoiler-free, non-copied Turkish description via Gemini
+(`domain/description_generator.py`). Used by the Flutter app's "add a Turkish
+book" form (bookapp's trbooks feature) when a user-submitted book has no
+description of its own; the result is never persisted server-side, the
+Flutter client stores it via the `submit_user_trbook` Supabase RPC.
+
 ## Analytics
 
 - Flutter logs authenticated searches to `semantic_search_logs`

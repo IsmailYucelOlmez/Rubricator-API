@@ -29,6 +29,9 @@ class Settings(BaseSettings):
 
     embedding_model: str = "models/gemini-embedding-001"
     rewrite_model: str = "gemini-2.5-flash"
+    description_model: str = "gemini-2.5-flash"
+    description_temperature: float = 0.6
+    description_max_output_tokens: int = 400
     max_query_length: int = 500
     initial_top_k: int = 50
     default_limit: int = 16
