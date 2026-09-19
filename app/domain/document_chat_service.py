@@ -9,12 +9,14 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.core.config import settings
+from app.core.mmr import mmr_select
 from app.data.datasources.gemini import DailyQuotaExhaustedError, GeminiEmbeddingClient
 from app.data.session_store import get_session_store
 from app.data.session_store.base import compute_expires_at
-from app.domain.document_chunker import DocumentChunker
+from app.domain.document_chunker import DocumentChunker, meaningful_chapter_title
 from app.domain.document_extractors.epub_extractor import EpubExtractor
 from app.domain.document_extractors.pdf_extractor import PdfExtractor
+from app.domain.question_analysis import classify_complexity, needs_condense
 from app.models.document_session import ChatTurn, DocumentChunk, DocumentSession
 
 logger = logging.getLogger(__name__)
@@ -28,11 +30,12 @@ Follow Up Input: {question}
 Standalone question:"""
 
 ANSWER_SYSTEM_PROMPT = """You answer questions about the uploaded document "{filename}" using ONLY the provided document excerpts.
-- Treat the excerpts as coming from that document alone.
-- Ignore publisher ads, catalogs, "also by this author" blurbs, or other book promotions if they appear in the excerpts.
-- If the answer is not in the context, say you don't know — do not invent a different book or plot.
-- Keep direct quotes under 2 sentences; prefer paraphrase.
-- Respond in the same language as the user's question."""
+Rules:
+1. Base every statement on the excerpts. If they do not contain the answer, say you don't know — never invent facts, plot, or a different book.
+2. Excerpts are labeled with their location (page or section); mention it when it helps the user find the passage.
+3. Ignore publisher ads, catalogs, "also by this author" blurbs, and other promotions inside the excerpts.
+4. Keep direct quotes under 2 sentences; prefer paraphrase.
+5. Answer concisely, in the same language as the user's question."""
 
 EXCERPT_MAX_CHARS = 200
 
@@ -144,7 +147,10 @@ class DocumentChatService:
             session.status = "processing"
             self._session_store.put(session)
 
-            texts = [item[0] for item in split_result.items]
+            texts = [
+                self._chunker.embedding_text(content, metadata)
+                for content, metadata in split_result.items
+            ]
 
             def _on_progress(done: int, total: int) -> None:
                 current = self._session_store.get(session_id)
@@ -253,8 +259,14 @@ class DocumentChatService:
         if query_embedding is None:
             raise RuntimeError("Embedding service is not configured")
 
-        retrieved = self._retrieve_chunks(session.chunks, query_embedding)
-        context = self._build_context(retrieved)
+        top_k = (
+            settings.document_retrieval_top_k_complex
+            if classify_complexity(question) == "complex"
+            else settings.document_retrieval_top_k
+        )
+        retrieved = self._retrieve_chunks(session.chunks, query_embedding, top_k=top_k)
+        selected = self._select_context_chunks(retrieved)
+        context = self._build_context(selected)
         answer = self._generate_answer(
             question,
             context,
@@ -276,14 +288,14 @@ class DocumentChatService:
 
         return ChatAnswer(
             answer=answer,
-            sources=[self._format_source(chunk) for chunk in retrieved],
+            sources=[self._format_source(chunk) for chunk in selected],
             session_expires_at=session.expires_at,
             questions_remaining=settings.document_max_questions_per_session
             - session.question_count,
         )
 
     def _condense_question(self, session: DocumentSession, question: str) -> str:
-        if not session.chat_turns:
+        if not session.chat_turns or not needs_condense(question):
             return question
 
         history_lines = []
@@ -314,30 +326,95 @@ class DocumentChatService:
         self,
         chunks: list[DocumentChunk],
         query_embedding: list[float],
+        top_k: int | None = None,
     ) -> list[DocumentChunk]:
+        k = top_k if top_k is not None else settings.document_retrieval_top_k
         scored = [
             (self._cosine_similarity(query_embedding, chunk.embedding), chunk)
             for chunk in chunks
         ]
         scored.sort(key=lambda item: item[0], reverse=True)
-        top_k = scored[: settings.document_retrieval_top_k]
-        return [chunk for _, chunk in top_k]
+        # Chunks below the relevance floor are more likely to mislead the
+        # model than help it; better to feed no context than a weak match.
+        relevant = [
+            (score, chunk)
+            for score, chunk in scored
+            if score >= settings.document_retrieval_min_score
+        ]
+
+        pool = relevant[: k * max(settings.document_mmr_fetch_multiplier, 1)]
+        if len(pool) <= k or settings.document_mmr_lambda >= 1.0:
+            return [chunk for _, chunk in pool[:k]]
+
+        picked = mmr_select(
+            [chunk.embedding for _, chunk in pool],
+            [score for score, _ in pool],
+            k,
+            settings.document_mmr_lambda,
+        )
+        return [pool[index][1] for index in picked]
+
+    @staticmethod
+    def _chunk_label(chunk: DocumentChunk) -> str:
+        metadata = chunk.metadata or {}
+        if metadata.get("page") is not None:
+            return f"[Page {metadata['page']}]"
+        if metadata.get("chapter_index") is not None:
+            title = meaningful_chapter_title(metadata.get("chapter_title"))
+            suffix = f": {title}" if title else ""
+            return f"[Section {metadata['chapter_index']}{suffix}]"
+        return ""
+
+    def _format_excerpt(self, chunk: DocumentChunk) -> str:
+        content = chunk.content.strip()
+        if not content:
+            return ""
+        label = self._chunk_label(chunk)
+        return f"{label}\n{content}" if label else content
+
+    def _select_context_chunks(self, ranked: list[DocumentChunk]) -> list[DocumentChunk]:
+        """Greedy fill of the character budget with whole chunks, most relevant first.
+
+        A chunk that does not fit is skipped (a smaller one further down may
+        still fit) instead of being cut mid-sentence. The first chunk is always
+        kept; _build_context hard-caps it if it alone exceeds the budget.
+        Selected chunks come back in document order, which reads more coherently.
+        """
+        budget = settings.document_max_context_chars
+        selected: list[DocumentChunk] = []
+        used = 0
+        for chunk in ranked:
+            piece = self._format_excerpt(chunk)
+            if not piece:
+                continue
+            cost = len(piece) + (2 if selected else 0)
+            if selected and used + cost > budget:
+                continue
+            selected.append(chunk)
+            used += cost
+            if used >= budget:
+                break
+        return sorted(selected, key=lambda chunk: chunk.index)
 
     def _build_context(self, chunks: list[DocumentChunk]) -> str:
+        if not chunks:
+            return "(No relevant excerpts were found in the document for this question.)"
+
+        budget = settings.document_max_context_chars
         parts: list[str] = []
         total_chars = 0
         for chunk in chunks:
-            piece = chunk.content.strip()
+            piece = self._format_excerpt(chunk)
             if not piece:
                 continue
-            if total_chars + len(piece) > settings.document_max_context_chars:
-                remaining = settings.document_max_context_chars - total_chars
+            if total_chars + len(piece) > budget:
+                remaining = budget - total_chars
                 if remaining <= 0:
                     break
                 piece = piece[:remaining]
             parts.append(piece)
             total_chars += len(piece)
-            if total_chars >= settings.document_max_context_chars:
+            if total_chars >= budget:
                 break
         return "\n\n".join(parts)
 

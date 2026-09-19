@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -16,6 +17,27 @@ class SplitResult:
 class ChunkingResult:
     chunks: list[DocumentChunk]
     truncated: bool
+
+
+# EPUB chapter titles are derived from file names, so most are "ch03" / "split_005" noise.
+_GENERIC_TITLE_TOKENS = frozenset(
+    {
+        "ch", "chap", "chapter", "chp", "sec", "section", "part", "text", "content",
+        "split", "index", "page", "xhtml", "html", "item", "id", "bölüm", "kısım",
+    }
+)
+
+
+def meaningful_chapter_title(title: str | None) -> str | None:
+    """The title if it carries real words, None if it is just a generated file name."""
+    if not title:
+        return None
+    tokens = [token for token in re.split(r"[-_.\s\d]+", title.lower()) if token]
+    if not tokens or all(token in _GENERIC_TITLE_TOKENS for token in tokens):
+        return None
+    if not any(len(token) >= 3 for token in tokens):
+        return None
+    return title.strip()
 
 
 def _even_sample(
@@ -72,6 +94,16 @@ class DocumentChunker:
             items = _even_sample(items, settings.document_max_chunks)
 
         return SplitResult(items=items, truncated=truncated)
+
+    @staticmethod
+    def embedding_text(content: str, metadata: dict) -> str:
+        """Text to embed: the chunk prefixed with its chapter title when one is meaningful.
+
+        Only the vector sees the prefix; the stored chunk and the excerpts shown
+        to users/the LLM stay the original text.
+        """
+        title = meaningful_chapter_title(metadata.get("chapter_title"))
+        return f"{title}\n\n{content}" if title else content
 
     def build_chunks(
         self,

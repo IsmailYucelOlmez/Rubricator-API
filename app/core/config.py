@@ -57,6 +57,18 @@ class Settings(BaseSettings):
     document_max_question_length: int = 500
     document_max_questions_per_session: int = 10
     document_retrieval_top_k: int = 5
+    # Used instead of document_retrieval_top_k for summary/analysis-style questions.
+    document_retrieval_top_k_complex: int = 10
+    # MMR diversity for chunk selection: 1.0 = pure relevance (MMR off), lower = more diverse.
+    document_mmr_lambda: float = 0.7
+    # MMR re-ranks the best top_k * multiplier relevant chunks down to top_k.
+    document_mmr_fetch_multiplier: int = 4
+    # Cosine similarity floor for a chunk to be considered relevant. Gemini
+    # embedding similarities for genuinely on-topic excerpts typically land
+    # well above this; it's set conservatively low to avoid dropping true
+    # matches and should be tightened once real query/score logs are
+    # available (see docs/retrieval-eval plan).
+    document_retrieval_min_score: float = 0.3
     document_max_context_chars: int = 12_000
     document_max_chat_turns_memory: int = 4
     document_chat_model: str = "gemini-2.5-flash"
