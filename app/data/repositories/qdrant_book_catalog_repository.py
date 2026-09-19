@@ -67,6 +67,7 @@ class QdrantBookCatalogRepository:
         limit: int,
         initial_k: int,
         language: str | None = None,
+        score_adjustments: dict[str, float] | None = None,
     ) -> list[dict[str, Any]]:
         conditions: list[qmodels.FieldCondition] = []
         if category:
@@ -80,9 +81,13 @@ class QdrantBookCatalogRepository:
         query_filter = qmodels.Filter(must=conditions) if conditions else None
 
         limit = max(limit, 1)
+        adjustments = score_adjustments or {}
         use_mmr = settings.search_mmr_lambda < 1.0
-        # With MMR we need a candidate pool larger than `limit` to diversify from.
-        result_limit = max(initial_k, limit) if use_mmr else min(limit, initial_k)
+        # MMR and feedback both need a candidate pool larger than `limit`: MMR to
+        # diversify from, feedback so a voted-up book below the cutoff can move in.
+        result_limit = (
+            max(initial_k, limit) if (use_mmr or adjustments) else min(limit, initial_k)
+        )
         response = self._client.query_points(
             collection_name=settings.qdrant_collection,
             query=query_vector,
@@ -98,26 +103,34 @@ class QdrantBookCatalogRepository:
                 quantization=qmodels.QuantizationSearchParams(rescore=True, oversampling=2.0),
             ),
         )
-        points = response.points
-        if use_mmr:
-            points = self._diversify(points, limit)
+        points = self._select(response.points, limit, adjustments)
         return [self._point_to_row(point) for point in points]
 
     @staticmethod
-    def _diversify(points: list[Any], limit: int) -> list[Any]:
-        """MMR over the candidate pool; falls back to plain top-`limit` if vectors are missing."""
-        if len(points) <= limit:
-            return points
+    def _select(points: list[Any], limit: int, adjustments: dict[str, float]) -> list[Any]:
+        """Pick `limit` points from the candidate pool.
+
+        Relevance is the vector score plus any feedback adjustment (the score reported
+        to clients stays the raw vector score). With MMR on and vectors present the
+        pool is diversified; otherwise it is plain top-`limit` by adjusted relevance.
+        """
+        relevance = [
+            point.score + adjustments.get(str((point.payload or {}).get("isbn13")), 0.0)
+            for point in points
+        ]
+        by_relevance = sorted(range(len(points)), key=lambda i: relevance[i], reverse=True)
+
         vectors = [point.vector for point in points]
-        if any(not isinstance(vector, list) for vector in vectors):
-            return points[:limit]
-        picked = mmr_select(
-            vectors,
-            [point.score for point in points],
-            limit,
-            settings.search_mmr_lambda,
+        can_diversify = (
+            settings.search_mmr_lambda < 1.0
+            and len(points) > limit
+            and all(isinstance(vector, list) for vector in vectors)
         )
-        return [points[index] for index in picked]
+        if not can_diversify:
+            return [points[i] for i in by_relevance[:limit]]
+
+        picked = mmr_select(vectors, relevance, limit, settings.search_mmr_lambda)
+        return [points[i] for i in picked]
 
     @staticmethod
     def _point_to_row(point: Any) -> dict[str, Any]:

@@ -66,6 +66,7 @@ class SupabaseBookCatalogRepository:
         limit: int,
         initial_k: int,
         language: str | None = None,
+        score_adjustments: dict[str, float] | None = None,
     ) -> list[dict[str, Any]]:
         rpc_result = self._client.rpc(
             "semantic_search_books",
@@ -77,7 +78,17 @@ class SupabaseBookCatalogRepository:
                 "p_language": language,
             },
         ).execute()
-        return rpc_result.data or []
+        rows = rpc_result.data or []
+        if score_adjustments:
+            # The RPC only returns `limit` rows, so votes can reorder them but not
+            # pull in books from further down (the Qdrant backend can).
+            rows = sorted(
+                rows,
+                key=lambda row: (row.get("similarity") or 0.0)
+                + score_adjustments.get(str(row.get("isbn13")), 0.0),
+                reverse=True,
+            )
+        return rows
 
     @staticmethod
     def _book_to_row(book: BookRecord, vector: list[float]) -> dict[str, Any]:

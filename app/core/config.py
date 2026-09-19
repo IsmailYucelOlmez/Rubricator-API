@@ -44,6 +44,14 @@ class Settings(BaseSettings):
     initial_top_k: int = 50
     default_limit: int = 16
     max_limit: int = 32
+    # Relevance feedback re-ranking: off until enough votes exist to be worth applying.
+    feedback_rerank_enabled: bool = False
+    # Largest score shift a book can get from votes (cosine similarity units).
+    feedback_weight: float = 0.05
+    # Shrinks tiny vote counts toward 0: adj = (up - down) / (up + down + prior).
+    feedback_prior_strength: float = 5.0
+    # Fewer votes than this on a (query, book) pair are ignored entirely.
+    feedback_min_votes: int = 3
     # Relevance-feedback vote lookup (Supabase get_semantic_feedback RPC).
     feedback_cache_ttl_seconds: int = 60
     # Longest a search waits for votes; on timeout it proceeds without them.

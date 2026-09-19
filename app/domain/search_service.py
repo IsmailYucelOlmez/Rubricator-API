@@ -6,8 +6,10 @@ from app.core.config import settings
 from app.data.datasources.gemini import GeminiEmbeddingClient
 from app.data.datasources.google_books import GoogleBooksClient
 from app.data.repositories.book_catalog_repository import get_catalog_repository
+from app.data.repositories.feedback_repository import FeedbackRepository
 from app.data.repositories.query_cache_repository import QueryCacheRepository
 from app.domain.book_normalizer import normalize_volumes
+from app.domain.feedback_scoring import compute_adjustments
 from app.domain.query_rewriter import QueryRewriter
 from app.models.schemas import RewriteResultModel, SemanticBookResult
 
@@ -32,12 +34,14 @@ class SemanticSearchService:
         query_rewriter: QueryRewriter | None = None,
         query_cache: QueryCacheRepository | None = None,
         catalog: Any | None = None,
+        feedback: FeedbackRepository | None = None,
     ) -> None:
         self.embeddings = embeddings or GeminiEmbeddingClient()
         self.google_client = google_client or GoogleBooksClient()
         self.query_rewriter = query_rewriter or QueryRewriter()
         self.query_cache = query_cache or QueryCacheRepository()
         self.catalog = catalog or get_catalog_repository(self.embeddings)
+        self.feedback = feedback or FeedbackRepository()
 
     def search(
         self,
@@ -72,6 +76,14 @@ class SemanticSearchService:
         rewritten: str | None = None
         query_vector: list[float] | None = None
 
+        # Votes depend only on the query text the user typed, so start the lookup now
+        # and let it overlap with the rewrite/embedding work below.
+        feedback_lookup = (
+            self.feedback.get_votes_async(query, language)
+            if settings.feedback_rerank_enabled
+            else None
+        )
+
         if effective_mode == "advanced":
             rewrite_result, query_vector = self._fetch_and_ingest(
                 search_query,
@@ -90,12 +102,15 @@ class SemanticSearchService:
         final_limit = min(limit or settings.default_limit, settings.max_limit)
         initial_k = initial_top_k or settings.initial_top_k
 
+        adjustments = self._feedback_adjustments(feedback_lookup)
+
         rows = self.catalog.search_by_embedding(
             query_vector,
             effective_category if effective_category != "All" else None,
             final_limit,
             initial_k,
             language,
+            score_adjustments=adjustments or None,
         )
         rows = self._apply_tone_sort(rows, tone)
         rows = rows[:final_limit]
@@ -174,6 +189,18 @@ class SemanticSearchService:
         ingested_isbns = [book.isbn13 for book in ingested] if ingested else [book.isbn13 for book in books]
         self.query_cache.set(query, "advanced", category, tone, ingested_isbns, rewrite_result)
         return rewrite_result, query_vector
+
+    def _feedback_adjustments(self, lookup: Any | None) -> dict[str, float]:
+        if lookup is None:
+            return {}
+        adjustments = compute_adjustments(FeedbackRepository.resolve(lookup))
+        if adjustments:
+            logger.info(
+                "feedback_applied adjusted_books=%d max_abs_delta=%.4f",
+                len(adjustments),
+                max(abs(delta) for delta in adjustments.values()),
+            )
+        return adjustments
 
     def _embed_query(self, query: str) -> list[float] | None:
         query = query.strip()
