@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -20,6 +21,43 @@ def make_cache_key(query: str, mode: str, category: str, tone: str) -> str:
         ]
     )
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+class CacheStats:
+    """Process-lifetime hit/miss counters, so the hit rate shows up in the logs."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.hits = 0
+        self.misses = 0
+
+    def record(self, hit: bool) -> tuple[int, int]:
+        with self._lock:
+            if hit:
+                self.hits += 1
+            else:
+                self.misses += 1
+            return self.hits, self.misses
+
+    def reset(self) -> None:
+        with self._lock:
+            self.hits = 0
+            self.misses = 0
+
+
+cache_stats = CacheStats()
+
+
+def _log_lookup(result: str, cache_key: str) -> None:
+    hits, misses = cache_stats.record(result == "hit")
+    logger.info(
+        "query_cache result=%s key=%s hits=%d misses=%d hit_rate=%.0f%%",
+        result,
+        cache_key[:8],
+        hits,
+        misses,
+        100 * hits / (hits + misses),
+    )
 
 
 class QueryCacheRepository:
@@ -50,6 +88,7 @@ class QueryCacheRepository:
             return None
 
         if result is None or not result.data:
+            _log_lookup("miss", cache_key)
             return None
 
         row = result.data
@@ -59,6 +98,7 @@ class QueryCacheRepository:
             try:
                 expiry = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
                 if expiry <= datetime.now(timezone.utc):
+                    _log_lookup("expired", cache_key)
                     return None
             except ValueError:
                 pass
@@ -72,6 +112,7 @@ class QueryCacheRepository:
             except Exception as error:
                 logger.warning("Invalid cached rewrite payload: %s", error)
 
+        _log_lookup("hit", cache_key)
         return isbns, rewrite
 
     def set(

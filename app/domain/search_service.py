@@ -101,6 +101,20 @@ class SemanticSearchService:
         rows = rows[:final_limit]
 
         results = [self._row_to_result(row) for row in rows]
+        similarities = [r.similarity for r in results if r.similarity is not None]
+        logger.info(
+            "semantic_search mode=%s language=%s category=%s tone=%s rewritten=%s "
+            "results=%d top_similarity=%s lowest_similarity=%s query_chars=%d",
+            effective_mode,
+            language,
+            effective_category,
+            tone,
+            rewritten is not None,
+            len(results),
+            f"{max(similarities):.3f}" if similarities else "n/a",
+            f"{min(similarities):.3f}" if similarities else "n/a",
+            len(search_query),
+        )
         return results, rewritten
 
     def _fetch_and_ingest(
@@ -114,6 +128,7 @@ class SemanticSearchService:
             _cached_isbns, rewrite = cached
             local_query = rewrite.effective_local_query(query) if rewrite else query.strip()
             query_vector = self._embed_query(local_query)
+            logger.info("advanced_search cache=hit rewrite=%s", rewrite is not None)
             return rewrite, query_vector
 
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -142,11 +157,20 @@ class SemanticSearchService:
             category=category,
         )
 
+        logger.info(
+            "advanced_search cache=miss rewrite=%s api_queries=%d volumes=%d new_candidates=%d",
+            rewrite_result is not None,
+            len(api_queries),
+            len(volumes),
+            len(books),
+        )
+
         if not books:
             self.query_cache.set(query, "advanced", category, tone, [], rewrite_result)
             return rewrite_result, query_vector
 
         ingested = self.catalog.upsert_books(books)
+        logger.info("advanced_search upserted=%d of %d candidates", len(ingested), len(books))
         ingested_isbns = [book.isbn13 for book in ingested] if ingested else [book.isbn13 for book in books]
         self.query_cache.set(query, "advanced", category, tone, ingested_isbns, rewrite_result)
         return rewrite_result, query_vector
