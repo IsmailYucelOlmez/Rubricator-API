@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 class QdrantBookCatalogRepository:
     """Persistence: Qdrant book_catalog collection."""
 
+    # Search can be refined from marked books: fetch their vectors, exclude ISBNs.
+    supports_feedback_refinement = True
+
     def __init__(self, embeddings: GeminiEmbeddingClient | None = None) -> None:
         self._embeddings = embeddings or GeminiEmbeddingClient()
         self._client = get_qdrant_client()
@@ -26,6 +29,28 @@ class QdrantBookCatalogRepository:
         except Exception as error:
             logger.warning("Failed to load catalog ISBNs: %s", error)
             return set()
+
+    def get_vectors(self, isbns: list[str]) -> dict[str, list[float]]:
+        """isbn13 -> stored embedding for the ISBNs that exist; {} if the lookup fails."""
+        if not isbns:
+            return {}
+        try:
+            records = self._client.retrieve(
+                collection_name=settings.qdrant_collection,
+                ids=[isbn_to_point_id(isbn) for isbn in isbns],
+                with_payload=["isbn13"],
+                with_vectors=True,
+            )
+        except Exception as error:
+            logger.warning("Vector lookup failed: %s", error)
+            return {}
+
+        vectors: dict[str, list[float]] = {}
+        for record in records:
+            isbn = (record.payload or {}).get("isbn13")
+            if isbn and isinstance(record.vector, list):
+                vectors[str(isbn)] = record.vector
+        return vectors
 
     def upsert_books(self, books: list[BookRecord]) -> list[BookRecord]:
         if not books:
@@ -68,6 +93,7 @@ class QdrantBookCatalogRepository:
         initial_k: int,
         language: str | None = None,
         score_adjustments: dict[str, float] | None = None,
+        exclude_isbns: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         conditions: list[qmodels.FieldCondition] = []
         if category:
@@ -78,7 +104,16 @@ class QdrantBookCatalogRepository:
             conditions.append(
                 qmodels.FieldCondition(key="language", match=qmodels.MatchValue(value=language))
             )
-        query_filter = qmodels.Filter(must=conditions) if conditions else None
+        must_not: list[qmodels.FieldCondition] = []
+        if exclude_isbns:
+            must_not.append(
+                qmodels.FieldCondition(key="isbn13", match=qmodels.MatchAny(any=list(exclude_isbns)))
+            )
+        query_filter = (
+            qmodels.Filter(must=conditions or None, must_not=must_not or None)
+            if conditions or must_not
+            else None
+        )
 
         limit = max(limit, 1)
         adjustments = score_adjustments or {}

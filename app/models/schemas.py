@@ -1,7 +1,30 @@
+import re
 from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+MAX_REFINEMENT_ISBNS = 5
+_ISBN_RE = re.compile(r"^[0-9]{9,12}[0-9X]$")
+
+
+class SearchFeedback(BaseModel):
+    """Books the user marked in the previous results of this search session."""
+
+    relevant: list[str] = Field(default_factory=list, max_length=MAX_REFINEMENT_ISBNS)
+    irrelevant: list[str] = Field(default_factory=list, max_length=MAX_REFINEMENT_ISBNS)
+
+    @field_validator("relevant", "irrelevant")
+    @classmethod
+    def _normalize_isbns(cls, values: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for value in values:
+            isbn = value.strip().upper()
+            if not _ISBN_RE.match(isbn):
+                raise ValueError(f"invalid isbn: {value!r}")
+            if isbn not in cleaned:
+                cleaned.append(isbn)
+        return cleaned
 
 
 class SemanticSearchRequest(BaseModel):
@@ -11,6 +34,9 @@ class SemanticSearchRequest(BaseModel):
     tone: str = "All"
     limit: int = Field(default=16, ge=1, le=32)
     language: str | None = None  # "tr" -> catalog-only search, Google Books is skipped
+    # Refines this search from the previous results: pulls the query toward "relevant"
+    # books and away from (and excludes) "irrelevant" ones. Qdrant catalog only.
+    feedback: SearchFeedback | None = None
 
 
 class SemanticBookResult(BaseModel):

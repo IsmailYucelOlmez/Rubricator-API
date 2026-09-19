@@ -1,8 +1,10 @@
 import logging
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal
 
 from app.core.config import settings
+from app.core.rocchio import refine_query_vector
 from app.data.datasources.gemini import GeminiEmbeddingClient
 from app.data.datasources.google_books import GoogleBooksClient
 from app.data.repositories.book_catalog_repository import get_catalog_repository
@@ -52,6 +54,8 @@ class SemanticSearchService:
         limit: int | None = None,
         initial_top_k: int | None = None,
         language: str | None = None,
+        relevant_isbns: Sequence[str] | None = None,
+        irrelevant_isbns: Sequence[str] | None = None,
     ) -> tuple[list[SemanticBookResult], str | None]:
         search_query = query.strip()[: settings.max_query_length]
         if not search_query:
@@ -103,6 +107,11 @@ class SemanticSearchService:
         initial_k = initial_top_k or settings.initial_top_k
 
         adjustments = self._feedback_adjustments(feedback_lookup)
+        query_vector, excluded = self._refine_from_marks(
+            query_vector, relevant_isbns or (), irrelevant_isbns or ()
+        )
+        # Only sent when refinement is active, so catalogs without it keep their signature.
+        refinement_kwargs = {"exclude_isbns": excluded} if excluded else {}
 
         rows = self.catalog.search_by_embedding(
             query_vector,
@@ -111,6 +120,7 @@ class SemanticSearchService:
             initial_k,
             language,
             score_adjustments=adjustments or None,
+            **refinement_kwargs,
         )
         rows = self._apply_tone_sort(rows, tone)
         rows = rows[:final_limit]
@@ -189,6 +199,52 @@ class SemanticSearchService:
         ingested_isbns = [book.isbn13 for book in ingested] if ingested else [book.isbn13 for book in books]
         self.query_cache.set(query, "advanced", category, tone, ingested_isbns, rewrite_result)
         return rewrite_result, query_vector
+
+    def _refine_from_marks(
+        self,
+        query_vector: list[float],
+        relevant: Sequence[str],
+        irrelevant: Sequence[str],
+    ) -> tuple[list[float], list[str]]:
+        """Rocchio refinement from the user's marks; returns (query vector, ISBNs to exclude).
+
+        Never fails a search: if the backend cannot do it or a step errors, the
+        original query vector is used.
+        """
+        rejected = list(dict.fromkeys(irrelevant))
+        # A book marked both ways is a client mistake; the safer reading is "irrelevant".
+        accepted = [isbn for isbn in dict.fromkeys(relevant) if isbn not in rejected]
+        if not accepted and not rejected:
+            return query_vector, []
+
+        if not getattr(self.catalog, "supports_feedback_refinement", False):
+            logger.warning("query_refinement skipped: catalog backend does not support it")
+            return query_vector, []
+
+        refined = query_vector
+        vectors = self.catalog.get_vectors([*accepted, *rejected])
+        relevant_vectors = [vectors[isbn] for isbn in accepted if isbn in vectors]
+        irrelevant_vectors = [vectors[isbn] for isbn in rejected if isbn in vectors]
+        try:
+            refined = refine_query_vector(
+                query_vector,
+                relevant_vectors,
+                irrelevant_vectors,
+                settings.refine_relevant_weight,
+                settings.refine_irrelevant_weight,
+            )
+        except Exception as error:
+            logger.warning("query_refinement failed, using the original query: %s", error)
+
+        logger.info(
+            "query_refined relevant=%d/%d irrelevant=%d/%d excluded=%d",
+            len(relevant_vectors),
+            len(accepted),
+            len(irrelevant_vectors),
+            len(rejected),
+            len(rejected),
+        )
+        return refined, rejected
 
     def _feedback_adjustments(self, lookup: Any | None) -> dict[str, float]:
         if lookup is None:

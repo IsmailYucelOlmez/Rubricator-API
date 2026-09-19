@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     initial_top_k: int = 50
     default_limit: int = 16
     max_limit: int = 32
+    # In-session query refinement (Rocchio) from relevant/irrelevant marks in a search request.
+    refine_relevant_weight: float = 0.5
+    refine_irrelevant_weight: float = 0.3
     # Relevance feedback re-ranking: off until enough votes exist to be worth applying.
     feedback_rerank_enabled: bool = False
     # Largest score shift a book can get from votes (cosine similarity units).

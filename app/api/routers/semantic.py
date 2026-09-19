@@ -54,6 +54,8 @@ def semantic_search(
             tone=body.tone,
             limit=body.limit,
             language=body.language,
+            relevant_isbns=body.feedback.relevant if body.feedback else None,
+            irrelevant_isbns=body.feedback.irrelevant if body.feedback else None,
         )
     except RuntimeError as error:
         logger.exception("Semantic search failed")
