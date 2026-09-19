@@ -14,6 +14,8 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    environment: Literal["development", "production"] = "development"
+
     google_api_key: str = ""
     google_books_api_key: str = ""
     supabase_url: str = ""
@@ -69,6 +71,15 @@ class Settings(BaseSettings):
     # Session store backend
     redis_url: str = ""
     session_store_backend: Literal["memory", "redis"] = "memory"
+
+    def ensure_production_ready(self) -> None:
+        """Fail fast instead of silently serving LLM/embedding endpoints without auth."""
+        if self.environment == "production" and not self.api_key:
+            raise RuntimeError(
+                "API_KEY must be set when ENVIRONMENT=production — otherwise the "
+                "LLM/embedding-backed endpoints are open with no authentication. "
+                "Set API_KEY, or set ENVIRONMENT=development for local/unauthenticated use."
+            )
 
     @property
     def document_max_file_size_bytes(self) -> int:

@@ -16,6 +16,7 @@ logging.basicConfig(level=logging.INFO)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    settings.ensure_production_ready()
     get_session_store().start_cleanup_task()
     yield
     get_session_store().stop_cleanup_task()
