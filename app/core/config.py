@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     initial_top_k: int = 50
     default_limit: int = 16
     max_limit: int = 32
+    # Relevance-feedback vote lookup (Supabase get_semantic_feedback RPC).
+    feedback_cache_ttl_seconds: int = 60
+    # Longest a search waits for votes; on timeout it proceeds without them.
+    feedback_lookup_timeout_seconds: float = 0.15
     # Book search MMR (Qdrant backend): fetch initial_top_k candidates, diversify down to limit.
     # 1.0 = pure relevance (MMR off).
     search_mmr_lambda: float = 0.7
