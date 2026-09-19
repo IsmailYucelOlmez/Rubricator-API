@@ -4,6 +4,7 @@ from typing import Any
 from qdrant_client.http import models as qmodels
 
 from app.core.config import settings
+from app.core.mmr import mmr_select
 from app.data.datasources.gemini import GeminiEmbeddingClient
 from app.data.datasources.qdrant import fetch_all_catalog_isbns, get_qdrant_client, isbn_to_point_id
 from app.data.repositories.book_catalog_repository import parse_volume_id_from_thumbnail
@@ -78,13 +79,17 @@ class QdrantBookCatalogRepository:
             )
         query_filter = qmodels.Filter(must=conditions) if conditions else None
 
-        result_limit = min(max(limit, 1), initial_k)
+        limit = max(limit, 1)
+        use_mmr = settings.search_mmr_lambda < 1.0
+        # With MMR we need a candidate pool larger than `limit` to diversify from.
+        result_limit = max(initial_k, limit) if use_mmr else min(limit, initial_k)
         response = self._client.query_points(
             collection_name=settings.qdrant_collection,
             query=query_vector,
             query_filter=query_filter,
             limit=result_limit,
             with_payload=True,
+            with_vectors=use_mmr,
             # Without explicit search_params, Qdrant skips rescoring the INT8-quantized
             # ANN candidates against full-precision vectors, which measurably degrades
             # top-k quality (verified empirically against exact/brute-force search).
@@ -93,7 +98,26 @@ class QdrantBookCatalogRepository:
                 quantization=qmodels.QuantizationSearchParams(rescore=True, oversampling=2.0),
             ),
         )
-        return [self._point_to_row(point) for point in response.points]
+        points = response.points
+        if use_mmr:
+            points = self._diversify(points, limit)
+        return [self._point_to_row(point) for point in points]
+
+    @staticmethod
+    def _diversify(points: list[Any], limit: int) -> list[Any]:
+        """MMR over the candidate pool; falls back to plain top-`limit` if vectors are missing."""
+        if len(points) <= limit:
+            return points
+        vectors = [point.vector for point in points]
+        if any(not isinstance(vector, list) for vector in vectors):
+            return points[:limit]
+        picked = mmr_select(
+            vectors,
+            [point.score for point in points],
+            limit,
+            settings.search_mmr_lambda,
+        )
+        return [points[index] for index in picked]
 
     @staticmethod
     def _point_to_row(point: Any) -> dict[str, Any]:

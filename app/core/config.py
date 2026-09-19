@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     initial_top_k: int = 50
     default_limit: int = 16
     max_limit: int = 32
+    # Book search MMR (Qdrant backend): fetch initial_top_k candidates, diversify down to limit.
+    # 1.0 = pure relevance (MMR off).
+    search_mmr_lambda: float = 0.7
 
     # Document chat — limits
     document_max_file_size_mb: int = 20
