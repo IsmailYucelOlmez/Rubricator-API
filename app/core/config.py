@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     api_key: str = ""
 
     embedding_model: str = "models/gemini-embedding-001"
+    # Process-wide cap on in-flight Gemini embedding batch requests, shared by all
+    # document sessions, catalog ingests and scripts (per-session pools stay separate).
+    embedding_max_concurrency: int = 10
+    # Process-wide pacing of embedding batch requests; 0 = unlimited. Set to your
+    # Gemini tier's embedding requests-per-minute to avoid 429 bursts.
+    embedding_requests_per_minute: int = 0
     rewrite_model: str = "gemini-2.5-flash"
     description_model: str = "gemini-2.5-flash"
     description_temperature: float = 0.6

@@ -1,8 +1,10 @@
 import logging
 import re
+import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
@@ -16,6 +18,75 @@ MAX_RETRIES = 5
 MAX_TOTAL_WAIT_SECONDS = 300
 
 ProgressCallback = Callable[[int, int], None]
+
+
+class GlobalEmbeddingLimiter:
+    """Process-wide gate shared by every embedding batch request.
+
+    Per-session thread pools only bound their own concurrency; with several
+    sessions/ingests running they would still burst past the API quota together
+    and then all back off independently. This adds (1) a cap on in-flight
+    requests across the whole process, (2) optional request pacing, and (3) a
+    shared cooldown: when one request is rate limited, every other queued
+    request waits it out instead of hammering the API.
+    """
+
+    def __init__(
+        self,
+        max_concurrent: int,
+        requests_per_minute: int = 0,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self._semaphore = threading.BoundedSemaphore(max(1, max_concurrent))
+        self._interval = 60.0 / requests_per_minute if requests_per_minute > 0 else 0.0
+        self._clock = clock
+        self._sleep = sleep
+        self._lock = threading.Lock()
+        self._next_slot = 0.0
+        self._cooldown_until = 0.0
+
+    @contextmanager
+    def slot(self) -> Iterator[None]:
+        self._semaphore.acquire()
+        try:
+            self._wait_for_turn()
+            yield
+        finally:
+            self._semaphore.release()
+
+    def penalize(self, seconds: float) -> None:
+        """Hold back every request that has not started yet for `seconds`."""
+        with self._lock:
+            self._cooldown_until = max(self._cooldown_until, self._clock() + seconds)
+        logger.warning("Embedding rate limit hit; pausing new requests for ~%ds", int(seconds))
+
+    def _wait_for_turn(self) -> None:
+        with self._lock:
+            start = max(self._clock(), self._next_slot)
+            self._next_slot = start + self._interval
+        while True:
+            with self._lock:
+                target = max(start, self._cooldown_until)
+            delay = target - self._clock()
+            if delay <= 0:
+                return
+            self._sleep(delay)
+
+
+_limiter: GlobalEmbeddingLimiter | None = None
+_limiter_lock = threading.Lock()
+
+
+def get_embedding_limiter() -> GlobalEmbeddingLimiter:
+    global _limiter
+    with _limiter_lock:
+        if _limiter is None:
+            _limiter = GlobalEmbeddingLimiter(
+                max_concurrent=settings.embedding_max_concurrency,
+                requests_per_minute=settings.embedding_requests_per_minute,
+            )
+        return _limiter
 
 
 def _parse_retry_seconds(error: Exception) -> int:
@@ -68,9 +139,11 @@ def embed_batch_with_retry(
 ) -> list[list[float]]:
     attempts = 0
     waited = 0
+    limiter = get_embedding_limiter()
     while True:
         try:
-            return embeddings.embed_documents(texts, batch_size=len(texts))
+            with limiter.slot():
+                return embeddings.embed_documents(texts, batch_size=len(texts))
         except Exception as error:
             if _is_daily_quota_exhausted(error):
                 raise DailyQuotaExhaustedError(
@@ -89,6 +162,8 @@ def embed_batch_with_retry(
                     waited,
                 )
                 raise
+            if _is_rate_limit_error(error):
+                limiter.penalize(wait)
             reason = "Rate limited" if _is_rate_limit_error(error) else "Transient API error"
             logger.warning(
                 "%s — waiting %ds before retry (%d/%d)...",
@@ -180,8 +255,12 @@ class GeminiEmbeddingClient:
         if not query:
             return None
         try:
+            # Interactive path: never queued behind background batches, but a 429
+            # here still tells the batch lane to back off.
             return self._embeddings.embed_query(query)
         except Exception as error:
+            if _is_rate_limit_error(error):
+                get_embedding_limiter().penalize(_parse_retry_seconds(error))
             logger.warning("Query embedding failed for %r: %s", query[:80], error)
             return None
 
