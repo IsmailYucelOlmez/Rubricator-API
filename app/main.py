@@ -9,6 +9,7 @@ from app.api.routers.semantic import router as semantic_router
 from app.api.routers.sessions import router as sessions_router
 from app.api.routers.trbooks import router as trbooks_router
 from app.core.config import settings
+from app.core.upload_limit import UploadSizeLimitMiddleware
 from app.data.session_store import get_session_store
 
 logging.basicConfig(level=logging.INFO)
@@ -24,6 +25,12 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="BookApp Semantic API", version="1.0.0", lifespan=lifespan)
 
+# Added before CORS so it sits inside it (its 413s still get CORS headers).
+app.add_middleware(
+    UploadSizeLimitMiddleware,
+    path="/api/v1/sessions",
+    max_bytes=lambda: settings.document_max_file_size_bytes,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,

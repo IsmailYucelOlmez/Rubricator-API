@@ -103,6 +103,9 @@ class Settings(BaseSettings):
     # Optional rate limits
     document_max_concurrent_sessions: int = 25
     document_max_sessions_per_ip_hour: int = 10
+    # Per account, keyed by the id the edge function forwards in X-User-Id; the
+    # per-IP limit above only applies to callers that don't send one.
+    document_max_sessions_per_user_hour: int = 10
 
     # Session store backend
     redis_url: str = ""
