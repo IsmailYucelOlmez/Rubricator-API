@@ -106,6 +106,9 @@ class Settings(BaseSettings):
     # Per account, keyed by the id the edge function forwards in X-User-Id; the
     # per-IP limit above only applies to callers that don't send one.
     document_max_sessions_per_user_hour: int = 10
+    # Per client IP, per minute; each call costs Gemini requests. 0 = unlimited.
+    search_max_requests_per_minute: int = 20
+    description_max_requests_per_minute: int = 5
 
     # Session store backend
     redis_url: str = ""

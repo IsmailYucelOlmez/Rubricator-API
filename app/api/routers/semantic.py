@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import settings
+from app.core.rate_limit import SlidingWindowRateLimiter, rate_limit
 from app.data.repositories.search_log_repository import SearchLogRepository
 from app.domain.search_service import SemanticSearchService
 from app.models.schemas import (
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["semantic"])
 _bearer = HTTPBearer(auto_error=False)
+_search_rate_limit = SlidingWindowRateLimiter(lambda: settings.search_max_requests_per_minute)
 _search_service = SemanticSearchService()
 _search_logger = SearchLogRepository()
 
@@ -39,6 +41,7 @@ def health() -> HealthResponse:
 def semantic_search(
     body: SemanticSearchRequest,
     _: None = Depends(_verify_api_key),
+    __: None = Depends(rate_limit(_search_rate_limit)),
 ) -> SemanticSearchResponse:
     if not settings.google_api_key:
         raise HTTPException(status_code=503, detail="Embedding service is not configured")

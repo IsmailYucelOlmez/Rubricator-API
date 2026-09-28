@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import settings
+from app.core.rate_limit import SlidingWindowRateLimiter, rate_limit
 from app.domain.description_generator import TrbookDescriptionGenerator
 from app.models.schemas import TrbookDescriptionRequest, TrbookDescriptionResponse
 
@@ -11,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["trbooks"])
 _bearer = HTTPBearer(auto_error=False)
+_description_rate_limit = SlidingWindowRateLimiter(lambda: settings.description_max_requests_per_minute)
 _description_generator = TrbookDescriptionGenerator()
 
 
@@ -27,6 +29,7 @@ def _verify_api_key(
 def generate_description(
     body: TrbookDescriptionRequest,
     _: None = Depends(_verify_api_key),
+    __: None = Depends(rate_limit(_description_rate_limit)),
 ) -> TrbookDescriptionResponse:
     """Used by the Flutter "add a Turkish book" form's optional AI-description
     button (bookapp's trbooks feature) — title/author/ISBN in, a short
