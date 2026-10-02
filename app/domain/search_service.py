@@ -11,6 +11,7 @@ from app.data.repositories.book_catalog_repository import get_catalog_repository
 from app.data.repositories.feedback_repository import FeedbackRepository
 from app.data.repositories.query_cache_repository import QueryCacheRepository
 from app.domain.book_normalizer import normalize_volumes
+from app.domain.cover_urls import cover_for_display
 from app.domain.feedback_scoring import compute_adjustments
 from app.domain.query_rewriter import QueryRewriter
 from app.models.schemas import RewriteResultModel, SemanticBookResult
@@ -265,8 +266,7 @@ class SemanticSearchService:
         return self.embeddings.embed_query(query)
 
     def _row_to_result(self, row: dict[str, Any]) -> SemanticBookResult:
-        thumbnail = row.get("thumbnail_url")
-        cover = f"{thumbnail}&fife=w800" if thumbnail else None
+        cover = cover_for_display(row.get("thumbnail_url"))
         authors = row.get("authors") or ""
         author = authors.split(";")[0].strip() if authors else "Unknown author"
         source = str(row.get("source") or "local")

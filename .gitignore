@@ -9,3 +9,5 @@ dist/
 build/
 data/*.csv
 !data/.gitkeep
+
+logs/
